@@ -28,3 +28,22 @@ Groq API требует подключение к интернету и имее
 - https://console.groq.com/docs/models
 - https://console.groq.com/docs/speech-to-text
 - https://console.groq.com/docs/reasoning
+
+## MyOS 1.4
+- Installed-app grid: search, starred favorites, recent launches and original icons.
+- AI chat opens apps from explicit user commands without confirmation.
+- Microphone and Send are embedded in the chat text field.
+
+## Permanent signed releases
+The private release keystore must NEVER be committed to this public repo.
+Set these GitHub Actions repository secrets: MYOS_KEYSTORE_BASE64 (base64
+contents of permanent myos-release.jks), MYOS_STORE_PASSWORD,
+MYOS_KEY_PASSWORD and MYOS_KEY_ALIAS (myos).
+
+Settings > Secrets and variables > Actions > New repository secret.
+On every push, GitHub builds debug and release variants. With the secrets,
+it signs and verifies MyOS-release-signed.apk. Otherwise, it uploads
+a debug APK and aligned unsigned release for secure off-repo signing.
+
+Previously installed debug builds have a different signing certificate.
+Back up local data before migrating to the release build.

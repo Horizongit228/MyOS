@@ -23,6 +23,16 @@ class LocalStore(context: Context) {
         p.edit().putInt("palette_id",s.paletteId).putInt("card_radius",s.radius)
             .putFloat("card_opacity",s.opacity).putBoolean("compact_ui",s.compact).apply()
     }
+    fun favoritePackages():Set<String> = p.getStringSet("favorite_packages",emptySet())?.toSet()?:emptySet()
+    fun setFavoritePackages(values:Set<String>) {
+        p.edit().putStringSet("favorite_packages",values.toSet()).apply()
+    }
+    fun recentPackages():List<String> =
+        p.getString("recent_packages","")?.split("|")?.filter { it.isNotBlank() }?:emptyList()
+    fun markLaunched(packageName:String) {
+        val updated=(listOf(packageName)+recentPackages().filter { it!=packageName }).take(15)
+        p.edit().putString("recent_packages",updated.joinToString("|")).apply()
+    }
     var textModel: String
         get() = p.getString("text_model", "openai/gpt-oss-120b") ?: "openai/gpt-oss-120b"
         set(value) { p.edit().putString("text_model", value).apply() }

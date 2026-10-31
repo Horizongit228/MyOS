@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -17,16 +17,59 @@ jobs:
           java-version: '17'
       - name: Configure Android SDK
         uses: android-actions/setup-android@v4
-      - name: Install Android platform
+      - name: Install Android platform and build tools
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
-      - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Build APKs
+        run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
+      - name: Zipalign unsigned release
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            app/build/outputs/apk/release/MyOS-release-aligned.apk
+      - name: Sign release with permanent key (secrets required)
+        env:
+          MYOS_KEYSTORE_BASE64: ${{ secrets.MYOS_KEYSTORE_BASE64 }}
+          MYOS_STORE_PASSWORD: ${{ secrets.MYOS_STORE_PASSWORD }}
+          MYOS_KEY_PASSWORD: ${{ secrets.MYOS_KEY_PASSWORD }}
+          MYOS_KEY_ALIAS: ${{ secrets.MYOS_KEY_ALIAS }}
+        shell: bash
+        run: |
+          if [[ -z "$MYOS_KEYSTORE_BASE64" || -z "$MYOS_STORE_PASSWORD" || -z "$MYOS_KEY_PASSWORD" || -z "$MYOS_KEY_ALIAS" ]]; then
+            echo "Signing secrets not configured; unsigned release stays private in build artifacts."
+            exit 0
+          fi
+          keyfile="$(mktemp -p "$RUNNER_TEMP" myos-signing-XXXXXX.jks)"
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s' "$MYOS_KEYSTORE_BASE64" | base64 --decode > "$keyfile"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$keyfile" --ks-key-alias "$MYOS_KEY_ALIAS" \
+            --ks-pass env:MYOS_STORE_PASSWORD --key-pass env:MYOS_KEY_PASSWORD \
+            --out app/build/outputs/apk/release/MyOS-release-signed.apk \
+            app/build/outputs/apk/release/MyOS-release-aligned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
+            --verbose app/build/outputs/apk/release/MyOS-release-signed.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MyOS-debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
           retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyOS-signed-release-APK
+          path: app/build/outputs/apk/release/MyOS-release-signed.apk
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Copy signing utility
+        run: cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" app/build/outputs/apk/release/apksigner.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyOS-signing-inputs
+          path: |
+            app/build/outputs/apk/release/MyOS-release-aligned.apk
+            app/build/outputs/apk/release/apksigner.jar
+          retention-days: 7
+          if-no-files-found: error

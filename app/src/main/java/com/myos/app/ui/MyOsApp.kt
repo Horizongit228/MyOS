@@ -53,8 +53,19 @@ fun MyOsApp(store:LocalStore,secrets:SecureKeyStore){
     var sending by remember{mutableStateOf(false)}
     var error by remember{mutableStateOf("")}
     var starterPrompt by remember{mutableStateOf("")}
-    var pendingApp by remember{mutableStateOf<PhoneApp?>(null)}
-    val apps=remember(page){PhoneApps.discover(context)}
+    var favorites by remember{mutableStateOf(store.favoritePackages())}
+    var recent by remember{mutableStateOf(store.recentPackages())}
+    val apps=remember(page,favorites,recent){
+        PhoneApps.discover(context).sortedWith(
+            compareByDescending<PhoneApp>{it.packageName in favorites}
+                .thenBy{val i=recent.indexOf(it.packageName);if(i<0)999 else i}
+                .thenBy(String.CASE_INSENSITIVE_ORDER){it.label})
+    }
+    fun openApp(app:PhoneApp):Boolean{
+        val launched=PhoneApps.open(context,app)
+        if(launched){store.markLaunched(app.packageName);recent=store.recentPackages()}
+        return launched
+    }
     val scope=rememberCoroutineScope()
     val pages=listOf(0,1,5,4)
     val symbols=listOf("⌂","✦","▦","⚙")
@@ -105,7 +116,7 @@ fun MyOsApp(store:LocalStore,secrets:SecureKeyStore){
                 when(page){
                     0->MyOsDashboard(notes.size,tasks,style,apps,onOpen={page=it},
                         onAiAction={starterPrompt=it;page=1},
-                        onApp={PhoneApps.open(context,it)})
+                        onApp={openApp(it)})
                     1->ChatUi(messages,token.isNotBlank(),sending,error,textModel,speechModel,token,
                         prefill=starterPrompt,onOpenSettings={page=4},
                         onSend={input->
@@ -116,10 +127,12 @@ fun MyOsApp(store:LocalStore,secrets:SecureKeyStore){
                                     messages.add(Chat(role="user",content=message))
                                     val app=PhoneApps.match(apps,requested)
                                     if(app!=null){
-                                        messages.add(Chat(role="assistant",content="Найдено "+app.label+". Подтвердите запуск приложения."))
-                                        pendingApp=app
+                                        val ok=openApp(app)
+                                        messages.add(Chat(role="assistant",content=if(ok)
+                                            "Открываю «"+app.label+"»." else
+                                            "Не удалось открыть «"+app.label+"»."))
                                     }else{
-                                        messages.add(Chat(role="assistant",content="Не нашёл приложение «"+requested+"» на телефоне. Откройте раздел «Приложения»."))
+                                        messages.add(Chat(role="assistant",content="Не нашёл «"+requested+"». Попробуйте поиск в разделе «Приложения»."))
                                     }
                                     store.saveChats(messages)
                                     starterPrompt=""
@@ -159,25 +172,15 @@ fun MyOsApp(store:LocalStore,secrets:SecureKeyStore){
                         },
                         onTextModel={textModel=it;store.textModel=it},
                         onSpeechModel={speechModel=it;store.speechModel=it})
-                    5->PhoneAppsScreen(style,apps){PhoneApps.open(context,it)}
+                    5->PhoneAppsScreen(style,apps,favorites,
+                        onFavorite={app->
+                            favorites=if(app.packageName in favorites)favorites-app.packageName else favorites+app.packageName
+                            store.setFavoritePackages(favorites)
+                        },onOpen={openApp(it)})
                 }
             }
         }
-        if(pendingApp!=null){
-            val app=pendingApp!!
-            AlertDialog(onDismissRequest={pendingApp=null},
-                title={Text("Открыть приложение?")},
-                text={Text("MyAI предлагает открыть «"+app.label+"». Запустить?")},
-                confirmButton={
-                    Button(onClick={
-                        val ok=PhoneApps.open(context,app)
-                        messages.add(Chat(role="assistant",content=if(ok)"Открываю "+app.label+"." else "Не удалось открыть "+app.label+"."))
-                        store.saveChats(messages)
-                        pendingApp=null
-                    }){Text("Открыть")}
-                },
-                dismissButton={TextButton(onClick={pendingApp=null}){Text("Отмена")}})
-        }
+
     }
 }
 
@@ -257,6 +260,44 @@ private fun ChatUi(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) startRecording() else voiceError = "Для голосового ввода нужно разрешение на микрофон."
     }
+    fun toggleRecording() {
+        if(!recording) {
+            if(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)
+                startRecording()
+            else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            val captured=audioFile
+            try {
+                recorder?.stop()
+                recorder?.release()
+                recorder=null
+                recording=false
+                if(captured!=null) {
+                    processingAudio=true
+                    scope.launch {
+                        try {
+                            val transcript=GroqClient.transcribe(key,speechModel,captured)
+                            draft=if(draft.isBlank())transcript else draft.trim()+" "+transcript
+                            voiceError=""
+                        } catch(e:Exception) {
+                            voiceError=e.localizedMessage?:"Не удалось распознать речь"
+                        } finally {
+                            processingAudio=false
+                            captured.delete()
+                            audioFile=null
+                        }
+                    }
+                }
+            }catch(e:Exception) {
+                runCatching{recorder?.release()}
+                recorder=null
+                recording=false
+                captured?.delete()
+                audioFile=null
+                voiceError="Запись слишком короткая или прервана."
+            }
+        }
+    }
     DisposableEffect(Unit) {
         onDispose { runCatching { recorder?.release() }; audioFile?.delete() }
     }
@@ -271,9 +312,9 @@ private fun ChatUi(
             }
         }
         if (messages.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(Modifier.weight(1f).fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                 Column(Modifier.padding(horizontal=24.dp),horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("✦ MyAI", style = MaterialTheme.typography.headlineMedium, color = blue)
+                    Text("✦ MyAI", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
                     Text(textModel, textAlign=TextAlign.Center, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
                     Text("Напишите вопрос или используйте микрофон", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface.copy(alpha=.7f))
                 }
@@ -295,7 +336,7 @@ private fun ChatUi(
                         }
                     }
                 }
-                if (sending) item { Text("MyAI отвечает…", color = Color.Gray) }
+                if (sending) item { Text("MyAI отвечает…", color = MaterialTheme.colorScheme.onSurface.copy(alpha=.7f)) }
             }
         }
         if (error.isNotBlank()) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error,
@@ -304,60 +345,34 @@ private fun ChatUi(
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if (processingAudio) LinearProgressIndicator(Modifier.fillMaxWidth())
         HorizontalDivider()
-        Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha=.38f)).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface.copy(alpha=.6f))
+            .padding(horizontal=12.dp,vertical=9.dp)) {
             OutlinedTextField(
-                value = draft, onValueChange = { draft = it },
-                modifier = Modifier.fillMaxWidth(), enabled = !sending,
-                placeholder = { Text("Сообщение...") }, maxLines = 4,
-                shape = RoundedCornerShape(14.dp)
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    enabled = hasKey && !processingAudio,
-                    contentPadding = PaddingValues(horizontal = 10.dp),
-                    onClick = {
-                        if (!recording) {
-                            if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
-                                startRecording()
-                            else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        } else {
-                            val captured = audioFile
-                            try {
-                                recorder?.stop()
-                                recorder?.release()
-                                recorder = null
-                                recording = false
-                                if (captured != null) {
-                                    processingAudio = true
-                                    scope.launch {
-                                        try {
-                                            val transcript = GroqClient.transcribe(key, speechModel, captured)
-                                            draft = if (draft.isBlank()) transcript else draft.trim() + " " + transcript
-                                            voiceError = ""
-                                        } catch (e: Exception) {
-                                            voiceError = e.localizedMessage ?: "Ошибка распознавания речи"
-                                        } finally { processingAudio = false; captured.delete(); audioFile = null }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                recorder?.release()
-                                recorder = null
-                                recording = false
-                                captured?.delete()
-                                audioFile = null
-                                voiceError = "Не удалось завершить запись."
-                            }
+                value=draft,onValueChange={draft=it},
+                modifier=Modifier.fillMaxWidth(),
+                enabled=!sending,
+                placeholder={Text("Сообщение или команда «Открой …»",maxLines=1)},
+                maxLines=4,shape=RoundedCornerShape(24.dp),
+                trailingIcon={
+                    Row(verticalAlignment=Alignment.CenterVertically,
+                        horizontalArrangement=Arrangement.spacedBy(0.dp)){
+                        IconButton(onClick={toggleRecording()},enabled=hasKey&&!processingAudio){
+                            Text(if(recording)"■" else "🎙",fontSize=19.sp,
+                                color=if(recording)Color(0xFFF19E9E) else MaterialTheme.colorScheme.primary)
+                        }
+                        IconButton(onClick={
+                            val text=draft.trim()
+                            if(text.isNotEmpty()){onSend(text);draft=""}
+                        },enabled=draft.isNotBlank()&&!sending){
+                            Text("➤",fontSize=22.sp,color=if(draft.isNotBlank())
+                                MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha=.32f))
                         }
                     }
-                ) { Text(if (recording) "■ Стоп" else "🎙") }
-                Spacer(Modifier.width(10.dp))
-                Button(onClick = { val text = draft.trim(); if (text.isNotEmpty()) { onSend(text); draft = "" } },
-                    enabled = draft.isNotBlank() && !sending,
-                    contentPadding = PaddingValues(horizontal = 10.dp)) { Text("→") }
-            }
+                }
+            )
         }
+
     }
 }
 
