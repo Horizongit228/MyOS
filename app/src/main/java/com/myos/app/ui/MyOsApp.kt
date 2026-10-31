@@ -6,6 +6,8 @@ import android.media.MediaRecorder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,11 +28,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.myos.app.data.*
 import kotlinx.coroutines.launch
 import java.io.File
 
-private val blue = Color(0xFF2563EB)
+private val blue = Color(0xFF777BF2)
 private val background = Color(0xFFF8FAFC)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,16 +50,19 @@ fun MyOsApp(store: LocalStore, secrets: SecureKeyStore) {
     var error by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val labels = listOf("Главная", "ИИ", "Заметки", "Задачи", "Настройки")
-    val symbols = listOf("⌂", "✦", "▤", "✓", "⚙")
+    val navPages = listOf(0, 1, 3, 4)
+    val navLabels = listOf("Главная", "ИИ", "Задачи", "Профиль")
+    val navSymbols = listOf("⌂", "✦", "☑", "♙")
+    var starterPrompt by remember { mutableStateOf("") }
 
     MaterialTheme(colorScheme = lightColorScheme(
         primary = blue, background = background, surface = Color.White,
         onSurface = Color(0xFF172033), surfaceVariant = Color(0xFFF1F5F9)
     )) {
         Scaffold(
-            containerColor = background,
+            containerColor = if (page == 0) Color(0xFF172C50) else background,
             topBar = {
-                TopAppBar(
+                if (page != 0) TopAppBar(
                     title = { Text(if (page == 0) "MyOS" else labels[page], fontWeight = FontWeight.Bold) },
                     actions = {
                         if (page == 1 && messages.isNotEmpty()) {
@@ -68,21 +74,43 @@ fun MyOsApp(store: LocalStore, secrets: SecureKeyStore) {
                 )
             },
             bottomBar = {
-                NavigationBar(containerColor = Color.White) {
-                    labels.forEachIndexed { i, label ->
-                        NavigationBarItem(selected = page == i, onClick = { page = i },
-                            icon = { Text(symbols[i]) }, label = { Text(label, maxLines = 1) },
-                            alwaysShowLabel = true)
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(if (page == 0) Color(0xFF172C50) else background)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .clip(RoundedCornerShape(26.dp))
+                        .background(
+                            androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                listOf(Color(0xFF445A8C), Color(0xFF596FAD), Color(0xFF3A568C))
+                            )
+                        )
+                        .border(1.dp, Color.White.copy(alpha = .25f), RoundedCornerShape(26.dp))
+                        .padding(vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    navPages.forEachIndexed { i, target ->
+                        Column(
+                            Modifier.weight(1f).clip(RoundedCornerShape(18.dp))
+                                .clickable { page = target }.padding(vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(navSymbols[i], color = if (page == target) Color(0xFFB9ACFF) else Color(0xFFC9D5F2),
+                                fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                            Text(navLabels[i], color = if (page == target) Color.White else Color(0xFFD7DEEE),
+                                fontSize = 11.sp, fontWeight = if (page == target) FontWeight.Bold else FontWeight.Normal)
+                        }
                     }
                 }
             }
         ) { insets ->
             Box(Modifier.fillMaxSize().padding(insets)) {
                 when (page) {
-                    0 -> HomeUi(notes.size, tasks.count { !it.done }, onOpen = { page = it })
+                    0 -> MyOsDashboard(notes.size, tasks, onOpen = { page = it }, onAiAction = { starterPrompt = it; page = 1 })
                     1 -> ChatUi(
                         messages, token.isNotBlank(), sending, error,
                         textModel, speechModel, token,
+                        prefill = starterPrompt,
                         onOpenSettings = { page = 4 },
                         onSend = { input ->
                             if (token.isNotBlank() && input.isNotBlank() && !sending) {
@@ -166,11 +194,13 @@ private fun HomeCard(icon: String, title: String, subtitle: String, page: Int, o
 private fun ChatUi(
     messages: List<Chat>, hasKey: Boolean, sending: Boolean, error: String,
     textModel: String, speechModel: String, key: String,
+    prefill: String,
     onOpenSettings: () -> Unit, onSend: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var draft by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(prefill) { if (prefill.isNotBlank()) draft = prefill }
     var recording by remember { mutableStateOf(false) }
     var processingAudio by remember { mutableStateOf(false) }
     var voiceError by remember { mutableStateOf("") }
