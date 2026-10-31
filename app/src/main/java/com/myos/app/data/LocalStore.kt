@@ -9,8 +9,20 @@ data class Note(val id: String = UUID.randomUUID().toString(), val title: String
 data class Task(val id: String = UUID.randomUUID().toString(), val title: String, val done: Boolean = false)
 data class Chat(val id: String = UUID.randomUUID().toString(), val role: String, val content: String)
 
+data class UserStyle(val paletteId:Int=0,val radius:Int=24,val opacity:Float=0.66f,val compact:Boolean=false)
+
 class LocalStore(context: Context) {
     private val p = context.getSharedPreferences("myos_local", Context.MODE_PRIVATE)
+    fun loadStyle():UserStyle=UserStyle(
+        paletteId=p.getInt("palette_id",0).coerceIn(0,3),
+        radius=p.getInt("card_radius",24).coerceIn(10,36),
+        opacity=p.getFloat("card_opacity",0.66f).coerceIn(.30f,.98f),
+        compact=p.getBoolean("compact_ui",false)
+    )
+    fun saveStyle(s:UserStyle){
+        p.edit().putInt("palette_id",s.paletteId).putInt("card_radius",s.radius)
+            .putFloat("card_opacity",s.opacity).putBoolean("compact_ui",s.compact).apply()
+    }
     var textModel: String
         get() = p.getString("text_model", "openai/gpt-oss-120b") ?: "openai/gpt-oss-120b"
         set(value) { p.edit().putString("text_model", value).apply() }

@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,8 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.myos.app.data.*
 import kotlinx.coroutines.launch
 import java.io.File
@@ -38,124 +39,144 @@ private val background = Color(0xFFF8FAFC)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MyOsApp(store: LocalStore, secrets: SecureKeyStore) {
-    var page by rememberSaveable { mutableStateOf(0) }
-    var token by remember { mutableStateOf(secrets.load()) }
-    var textModel by remember { mutableStateOf(store.textModel) }
-    var speechModel by remember { mutableStateOf(store.speechModel) }
-    val notes = remember { mutableStateListOf<Note>().apply { addAll(store.notes()) } }
-    val tasks = remember { mutableStateListOf<Task>().apply { addAll(store.tasks()) } }
-    val messages = remember { mutableStateListOf<Chat>().apply { addAll(store.chats()) } }
-    var sending by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-    val labels = listOf("Главная", "ИИ", "Заметки", "Задачи", "Настройки")
-    val navPages = listOf(0, 1, 3, 4)
-    val navLabels = listOf("Главная", "ИИ", "Задачи", "Профиль")
-    val navSymbols = listOf("⌂", "✦", "☑", "♙")
-    var starterPrompt by remember { mutableStateOf("") }
-
-    MaterialTheme(colorScheme = lightColorScheme(
-        primary = blue, background = background, surface = Color.White,
-        onSurface = Color(0xFF172033), surfaceVariant = Color(0xFFF1F5F9)
-    )) {
+fun MyOsApp(store:LocalStore,secrets:SecureKeyStore){
+    val context=LocalContext.current
+    var page by rememberSaveable{mutableStateOf(0)}
+    var token by remember{mutableStateOf(secrets.load())}
+    var textModel by remember{mutableStateOf(store.textModel)}
+    var speechModel by remember{mutableStateOf(store.speechModel)}
+    var style by remember{mutableStateOf(store.loadStyle())}
+    val palette=style.palette()
+    val notes=remember{mutableStateListOf<Note>().apply{addAll(store.notes())}}
+    val tasks=remember{mutableStateListOf<Task>().apply{addAll(store.tasks())}}
+    val messages=remember{mutableStateListOf<Chat>().apply{addAll(store.chats())}}
+    var sending by remember{mutableStateOf(false)}
+    var error by remember{mutableStateOf("")}
+    var starterPrompt by remember{mutableStateOf("")}
+    var pendingApp by remember{mutableStateOf<PhoneApp?>(null)}
+    val apps=remember(page){PhoneApps.discover(context)}
+    val scope=rememberCoroutineScope()
+    val pages=listOf(0,1,5,4)
+    val symbols=listOf("⌂","✦","▦","⚙")
+    val names=listOf("Главная","ИИ","Приложения","Настройки")
+    val titles=listOf("Главная","MyAI","Заметки","Задачи","Настройки","Приложения")
+    val colors=if(style.paletteId==3)lightColorScheme(
+        primary=palette.primary,background=palette.bgBottom,surface=Color.White,
+        onSurface=Color(0xFF213051),onBackground=Color(0xFF213051))
+    else darkColorScheme(primary=palette.primary,background=palette.bgBottom,
+        surface=Color(0xFF324666),onSurface=palette.text,onBackground=palette.text)
+    MaterialTheme(colorScheme=colors){
         Scaffold(
-            containerColor = if (page == 0) Color(0xFF172C50) else background,
-            topBar = {
-                if (page != 0) TopAppBar(
-                    title = { Text(if (page == 0) "MyOS" else labels[page], fontWeight = FontWeight.Bold) },
-                    actions = {
-                        if (page == 1 && messages.isNotEmpty()) {
-                            TextButton(onClick = { messages.clear(); store.saveChats(messages); error = "" },
-                                enabled = !sending) { Text("Очистить") }
-                        }
+            containerColor=palette.bgBottom,
+            topBar={
+                if(page!=0)TopAppBar(
+                    title={Text(titles.getOrElse(page){"MyOS"},fontWeight=FontWeight.Bold)},
+                    actions={
+                        if(page==1&&messages.isNotEmpty())TextButton(onClick={
+                            messages.clear();store.saveChats(messages);error=""
+                        },enabled=!sending){Text("Очистить")}
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = background)
+                    colors=TopAppBarDefaults.topAppBarColors(containerColor=palette.bgTop)
                 )
             },
-            bottomBar = {
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(if (page == 0) Color(0xFF172C50) else background)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(
-                            androidx.compose.ui.graphics.Brush.horizontalGradient(
-                                listOf(Color(0xFF445A8C), Color(0xFF596FAD), Color(0xFF3A568C))
-                            )
-                        )
-                        .border(1.dp, Color.White.copy(alpha = .25f), RoundedCornerShape(26.dp))
-                        .padding(vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    navPages.forEachIndexed { i, target ->
-                        Column(
-                            Modifier.weight(1f).clip(RoundedCornerShape(18.dp))
-                                .clickable { page = target }.padding(vertical = 6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(navSymbols[i], color = if (page == target) Color(0xFFB9ACFF) else Color(0xFFC9D5F2),
-                                fontSize = 23.sp, fontWeight = FontWeight.Bold)
-                            Text(navLabels[i], color = if (page == target) Color.White else Color(0xFFD7DEEE),
-                                fontSize = 11.sp, fontWeight = if (page == target) FontWeight.Bold else FontWeight.Normal)
+            bottomBar={
+                Row(Modifier.fillMaxWidth().background(palette.bgBottom)
+                    .padding(horizontal=12.dp,vertical=7.dp)
+                    .clip(RoundedCornerShape(style.radius.dp))
+                    .background(androidx.compose.ui.graphics.Brush.horizontalGradient(
+                        listOf(palette.surface.copy(alpha=.95f),palette.primary.copy(alpha=.48f))))
+                    .border(1.dp,palette.text.copy(alpha=.20f),RoundedCornerShape(style.radius.dp))
+                    .padding(vertical=7.dp),
+                    verticalAlignment=Alignment.CenterVertically){
+                    pages.forEachIndexed{i,target->
+                        Column(Modifier.weight(1f).clickable{page=target}
+                            .padding(vertical=5.dp),
+                            horizontalAlignment=Alignment.CenterHorizontally){
+                            Text(symbols[i],fontSize=23.sp,
+                                color=if(page==target)palette.primary else palette.text.copy(alpha=.75f))
+                            Text(names[i],fontSize=11.sp,
+                                color=if(page==target)palette.text else palette.muted,maxLines=1)
                         }
                     }
                 }
             }
-        ) { insets ->
-            Box(Modifier.fillMaxSize().padding(insets)) {
-                when (page) {
-                    0 -> MyOsDashboard(notes.size, tasks, onOpen = { page = it }, onAiAction = { starterPrompt = it; page = 1 })
-                    1 -> ChatUi(
-                        messages, token.isNotBlank(), sending, error,
-                        textModel, speechModel, token,
-                        prefill = starterPrompt,
-                        onOpenSettings = { page = 4 },
-                        onSend = { input ->
-                            if (token.isNotBlank() && input.isNotBlank() && !sending) {
-                                messages.add(Chat(role = "user", content = input.trim()))
-                                store.saveChats(messages)
-                                error = ""
-                                sending = true
-                                scope.launch {
-                                    try {
-                                        val answer = GroqClient.chat(token, textModel, messages.toList())
-                                        messages.add(Chat(role = "assistant", content = answer))
-                                        store.saveChats(messages)
-                                    } catch (e: Exception) {
-                                        error = e.localizedMessage ?: "Не удалось связаться с Groq."
-                                    } finally { sending = false }
+        ){insets->
+            Box(Modifier.fillMaxSize().background(palette.bgBottom).padding(insets)){
+                when(page){
+                    0->MyOsDashboard(notes.size,tasks,style,apps,onOpen={page=it},
+                        onAiAction={starterPrompt=it;page=1},
+                        onApp={PhoneApps.open(context,it)})
+                    1->ChatUi(messages,token.isNotBlank(),sending,error,textModel,speechModel,token,
+                        prefill=starterPrompt,onOpenSettings={page=4},
+                        onSend={input->
+                            if(input.isNotBlank()&&!sending){
+                                val message=input.trim()
+                                val requested=PhoneApps.requestedName(message)
+                                if(requested!=null){
+                                    messages.add(Chat(role="user",content=message))
+                                    val app=PhoneApps.match(apps,requested)
+                                    if(app!=null){
+                                        messages.add(Chat(role="assistant",content="Найдено "+app.label+". Подтвердите запуск приложения."))
+                                        pendingApp=app
+                                    }else{
+                                        messages.add(Chat(role="assistant",content="Не нашёл приложение «"+requested+"» на телефоне. Откройте раздел «Приложения»."))
+                                    }
+                                    store.saveChats(messages)
+                                    starterPrompt=""
+                                }else if(token.isBlank()){
+                                    error="Для общения с Groq добавьте ключ в настройках. Команды «открой ...» работают без ключа."
+                                }else{
+                                    messages.add(Chat(role="user",content=message))
+                                    store.saveChats(messages)
+                                    error=""
+                                    starterPrompt=""
+                                    sending=true
+                                    scope.launch{
+                                        try{
+                                            val answer=GroqClient.chat(token,textModel,messages.toList())
+                                            messages.add(Chat(role="assistant",content=answer))
+                                            store.saveChats(messages)
+                                        }catch(e:Exception){error=e.localizedMessage?:"Ошибка подключения к Groq."}
+                                        finally{sending=false}
+                                    }
                                 }
                             }
-                        }
-                    )
-                    2 -> NotesUi(notes, onSave = { note ->
-                        val pos = notes.indexOfFirst { it.id == note.id }
-                        if (pos >= 0) notes[pos] = note else notes.add(0, note)
+                        })
+                    2->NotesUi(notes,onSave={note->
+                        val pos=notes.indexOfFirst{it.id==note.id}
+                        if(pos>=0)notes[pos]=note else notes.add(0,note)
                         store.saveNotes(notes)
-                    }, onDelete = { id ->
-                        notes.removeAll { it.id == id }
-                        store.saveNotes(notes)
-                    })
-                    3 -> TasksUi(tasks, onAdd = {
-                        tasks.add(0, Task(title = it)); store.saveTasks(tasks)
-                    }, onToggle = { id ->
-                        val pos = tasks.indexOfFirst { it.id == id }
-                        if (pos >= 0) { tasks[pos] = tasks[pos].copy(done = !tasks[pos].done); store.saveTasks(tasks) }
-                    }, onDelete = { id ->
-                        tasks.removeAll { it.id == id }; store.saveTasks(tasks)
-                    })
-                    4 -> SettingsUi(token.isNotBlank(), textModel, speechModel,
-                        onKey = { newKey ->
-                            runCatching { secrets.save(newKey); token = newKey.trim() }
-                                .exceptionOrNull()?.localizedMessage
+                    },onDelete={id->notes.removeAll{it.id==id};store.saveNotes(notes)})
+                    3->TasksUi(tasks,onAdd={tasks.add(0,Task(title=it));store.saveTasks(tasks)},
+                        onToggle={id->
+                            val pos=tasks.indexOfFirst{it.id==id}
+                            if(pos>=0){tasks[pos]=tasks[pos].copy(done=!tasks[pos].done);store.saveTasks(tasks)}
+                        },onDelete={id->tasks.removeAll{it.id==id};store.saveTasks(tasks)})
+                    4->SettingsUi(token.isNotBlank(),textModel,speechModel,style,
+                        onStyle={newStyle->style=newStyle;store.saveStyle(newStyle)},
+                        onKey={key->
+                            runCatching{secrets.save(key);token=key.trim()}.exceptionOrNull()?.localizedMessage
                         },
-                        onTextModel = { textModel = it; store.textModel = it },
-                        onSpeechModel = { speechModel = it; store.speechModel = it }
-                    )
+                        onTextModel={textModel=it;store.textModel=it},
+                        onSpeechModel={speechModel=it;store.speechModel=it})
+                    5->PhoneAppsScreen(style,apps){PhoneApps.open(context,it)}
                 }
             }
+        }
+        if(pendingApp!=null){
+            val app=pendingApp!!
+            AlertDialog(onDismissRequest={pendingApp=null},
+                title={Text("Открыть приложение?")},
+                text={Text("MyAI предлагает открыть «"+app.label+"». Запустить?")},
+                confirmButton={
+                    Button(onClick={
+                        val ok=PhoneApps.open(context,app)
+                        messages.add(Chat(role="assistant",content=if(ok)"Открываю "+app.label+"." else "Не удалось открыть "+app.label+"."))
+                        store.saveChats(messages)
+                        pendingApp=null
+                    }){Text("Открыть")}
+                },
+                dismissButton={TextButton(onClick={pendingApp=null}){Text("Отмена")}})
         }
     }
 }
@@ -177,7 +198,7 @@ private fun HomeUi(notes: Int, tasks: Int, onOpen: (Int) -> Unit) {
 @Composable
 private fun HomeCard(icon: String, title: String, subtitle: String, page: Int, onOpen: (Int) -> Unit) {
     Card(Modifier.fillMaxWidth().clickable { onOpen(page) },
-        colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(icon, color = blue, style = MaterialTheme.typography.headlineSmall)
@@ -251,10 +272,10 @@ private fun ChatUi(
         }
         if (messages.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.padding(horizontal=24.dp),horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("✦ MyAI", style = MaterialTheme.typography.headlineMedium, color = blue)
-                    Text(textModel, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                    Text("Напишите вопрос или используйте микрофон", color = Color.Gray)
+                    Text(textModel, textAlign=TextAlign.Center, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha=.6f))
+                    Text("Напишите вопрос или используйте микрофон", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface.copy(alpha=.7f))
                 }
             }
         } else {
@@ -265,12 +286,12 @@ private fun ChatUi(
                         horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = if (msg.role == "user") blue else Color.White,
+                            color = if (msg.role == "user") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
                             shadowElevation = 1.dp,
                             modifier = Modifier.widthIn(max = 320.dp)
                         ) {
                             Text(msg.content, Modifier.padding(14.dp),
-                                color = if (msg.role == "user") Color.White else Color.Black)
+                                color = if (msg.role == "user") MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -283,15 +304,16 @@ private fun ChatUi(
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if (processingAudio) LinearProgressIndicator(Modifier.fillMaxWidth())
         HorizontalDivider()
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(10.dp),
-            verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha=.38f)).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it },
-                modifier = Modifier.weight(1f), enabled = hasKey && !sending,
+                modifier = Modifier.fillMaxWidth(), enabled = !sending,
                 placeholder = { Text("Сообщение...") }, maxLines = 4,
                 shape = RoundedCornerShape(14.dp)
             )
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(
                     enabled = hasKey && !processingAudio,
                     contentPadding = PaddingValues(horizontal = 10.dp),
@@ -330,8 +352,9 @@ private fun ChatUi(
                         }
                     }
                 ) { Text(if (recording) "■ Стоп" else "🎙") }
+                Spacer(Modifier.width(10.dp))
                 Button(onClick = { val text = draft.trim(); if (text.isNotEmpty()) { onSend(text); draft = "" } },
-                    enabled = hasKey && draft.isNotBlank() && !sending,
+                    enabled = draft.isNotBlank() && !sending,
                     contentPadding = PaddingValues(horizontal = 10.dp)) { Text("→") }
             }
         }
@@ -414,45 +437,80 @@ private fun TasksUi(tasks: List<Task>, onAdd: (String) -> Unit, onToggle: (Strin
 
 @Composable
 private fun SettingsUi(
-    hasKey: Boolean, textModel: String, speechModel: String,
-    onKey: (String) -> String?, onTextModel: (String) -> Unit, onSpeechModel: (String) -> Unit
-) {
-    var entered by remember { mutableStateOf("") }
-    var visible by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Groq API", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(if (hasKey) "Ключ сохранён ✓" else "Ключ не добавлен",
-            color = if (hasKey) Color(0xFF15803D) else Color.Gray)
-        OutlinedTextField(entered, { entered = it }, Modifier.fillMaxWidth(),
-            label = { Text("API-ключ") }, singleLine = true,
-            visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = { TextButton(onClick = { visible = !visible }) {
-                Text(if (visible) "Скрыть" else "Показать")
-            } }
-        )
-        Button(onClick = {
-            val error = onKey(entered)
-            result = error ?: "Ключ успешно сохранён."
-            if (error == null) entered = ""
-        }, enabled = entered.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Сохранить ключ") }
-        if (hasKey) OutlinedButton(onClick = {
-            result = onKey("") ?: "Ключ удалён."
-        }, modifier = Modifier.fillMaxWidth()) { Text("Удалить ключ") }
-        if (result.isNotBlank()) Text(result, color = blue)
-        HorizontalDivider()
-        Text("Модель чата", fontWeight = FontWeight.SemiBold)
-        GroqModelPicker(textModel, GroqClient.textModels, onTextModel)
-        Text("Распознавание голоса", fontWeight = FontWeight.SemiBold)
-        GroqModelPicker(speechModel, GroqClient.speechModels, onSpeechModel)
-        HorizontalDivider()
-        Text("MyOS 1.1.0", fontWeight = FontWeight.Bold)
-        Text("Светлый интерфейс · GPT-OSS · Whisper", color = Color.Gray)
-        Text("Заметки и задачи — офлайн. Чат и распознавание речи — через Groq API.",
-            color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-        Text("Ключ шифруется на устройстве. Аудио отправляется на Groq только после записи.",
-            color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+    hasKey:Boolean,textModel:String,speechModel:String,style:UserStyle,
+    onStyle:(UserStyle)->Unit,onKey:(String)->String?,
+    onTextModel:(String)->Unit,onSpeechModel:(String)->Unit
+){
+    var entered by remember{mutableStateOf("")}
+    var visible by remember{mutableStateOf(false)}
+    var result by remember{mutableStateOf("")}
+    val p=style.palette()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement=Arrangement.spacedBy(12.dp)){
+        FrostedPanel(style,Modifier.fillMaxWidth()){
+            Text("Оформление",fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleLarge,color=p.text)
+            Spacer(Modifier.height(6.dp))
+            Text("Все изменения видны сразу и сохраняются на устройстве.",color=p.muted)
+            Spacer(Modifier.height(14.dp))
+            Text("Цветовая тема",color=p.text,fontWeight=FontWeight.Medium)
+            Spacer(Modifier.height(8.dp))
+            val palettes=listOf("Ночь","Океан","Фиолетовый","Светлая")
+            palettes.chunked(2).forEachIndexed{row,items->
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                    items.forEachIndexed{col,name->
+                        val idx=row*2+col
+                        if(style.paletteId==idx)Button(onClick={onStyle(style.copy(paletteId=idx))},
+                            modifier=Modifier.weight(1f)){Text(name)}
+                        else OutlinedButton(onClick={onStyle(style.copy(paletteId=idx))},
+                            modifier=Modifier.weight(1f)){Text(name)}
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("Прозрачность карточек · "+(style.opacity*100).toInt()+"%",color=p.text)
+            Slider(value=style.opacity,onValueChange={onStyle(style.copy(opacity=it))},
+                valueRange=.30f..98f/100f)
+            Text("Скругление · "+style.radius+" dp",color=p.text)
+            Slider(value=style.radius.toFloat(),onValueChange={
+                onStyle(style.copy(radius=it.toInt()))
+            },valueRange=10f..36f,steps=25)
+            Row(verticalAlignment=Alignment.CenterVertically){
+                Text("Компактное отображение",modifier=Modifier.weight(1f),color=p.text)
+                Switch(checked=style.compact,onCheckedChange={onStyle(style.copy(compact=it))})
+            }
+            OutlinedButton(onClick={onStyle(UserStyle())},modifier=Modifier.fillMaxWidth()){
+                Text("Сбросить оформление")
+            }
+        }
+        FrostedPanel(style,Modifier.fillMaxWidth()){
+            Text("Groq API",fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleLarge,color=p.text)
+            Text(if(hasKey)"Ключ сохранён ✓" else "Ключ не добавлен",color=p.muted)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(entered,{entered=it},Modifier.fillMaxWidth(),
+                label={Text("API-ключ")},singleLine=true,
+                visualTransformation=if(visible)VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon={TextButton(onClick={visible=!visible}){Text(if(visible)"Скрыть" else "Показать")}})
+            Spacer(Modifier.height(8.dp))
+            Button(onClick={
+                val err=onKey(entered)
+                result=err?:"Ключ успешно сохранён."
+                if(err==null)entered=""
+            },enabled=entered.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text("Сохранить ключ")}
+            if(hasKey)OutlinedButton(onClick={result=onKey("")?:"Ключ удалён."},
+                modifier=Modifier.fillMaxWidth()){Text("Удалить ключ")}
+            if(result.isNotBlank())Text(result,color=p.muted)
+            Spacer(Modifier.height(12.dp))
+            Text("Модель чата",color=p.text,fontWeight=FontWeight.Medium)
+            GroqModelPicker(textModel,GroqClient.textModels,onTextModel)
+            Text("Распознавание голоса",color=p.text,fontWeight=FontWeight.Medium)
+            GroqModelPicker(speechModel,GroqClient.speechModels,onSpeechModel)
+        }
+        FrostedPanel(style,Modifier.fillMaxWidth()){
+            Text("Запуск приложений через MyAI",fontWeight=FontWeight.Bold,color=p.text)
+            Text("Например, напишите: «Открой Telegram». MyOS ищет программу на телефоне и спрашивает подтверждение перед запуском. Список приложений не отправляется в Groq.",color=p.muted)
+            Spacer(Modifier.height(8.dp))
+            Text("MyOS 1.3 · GPT-OSS 120B · Whisper Large V3",color=p.muted)
+        }
     }
 }
 
